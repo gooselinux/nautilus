@@ -1,0 +1,34 @@
+From 4a582e1e2592ad68b4c309ea6258f9e50822358d Mon Sep 17 00:00:00 2001
+From: Tomas Bzatek <tbzatek@redhat.com>
+Date: Tue, 23 Mar 2010 16:44:07 +0100
+Subject: [PATCH] Don't crash when hiding search bar with no text
+
+Happens in browser mode and only when search results pane is displayed
+---
+ src/nautilus-navigation-window-menus.c |   10 ++++++----
+ 1 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/nautilus-navigation-window-menus.c b/src/nautilus-navigation-window-menus.c
+index 5bddd5e..7aab617 100644
+--- a/src/nautilus-navigation-window-menus.c
++++ b/src/nautilus-navigation-window-menus.c
+@@ -698,10 +698,12 @@ action_show_hide_search_callback (GtkAction *action,
+ 			char *uri;
+ 
+ 			query = nautilus_query_editor_get_query (slot->query_editor);
+-			uri = nautilus_query_get_location (query);
+-			if (uri != NULL) {
+-				location = g_file_new_for_uri (uri);
+-				g_free (uri);
++			if (query != NULL) {
++				uri = nautilus_query_get_location (query);
++				if (uri != NULL) {
++					location = g_file_new_for_uri (uri);
++					g_free (uri);
++				}
+ 			}
+ 		}
+ 
+-- 
+1.7.0.1
+

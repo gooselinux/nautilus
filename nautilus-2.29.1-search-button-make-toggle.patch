@@ -1,0 +1,315 @@
+From eee73c5eb6d83955a7b7a1af9a86f8294eea218a Mon Sep 17 00:00:00 2001
+From: Nikos Verschore <nikosverschore@gmail.com>
+Date: Wed, 25 Nov 2009 09:16:17 +0000
+Subject: Make search button a toggle button
+
+Make the search button on the toolbar toggle between search
+and normal mode.
+See: https://bugzilla.gnome.org/show_bug.cgi?id=332078
+---
+diff --git a/src/nautilus-navigation-window-menus.c b/src/nautilus-navigation-window-menus.c
+index beaf1aa..ada1822 100644
+--- a/src/nautilus-navigation-window-menus.c
++++ b/src/nautilus-navigation-window-menus.c
+@@ -738,17 +738,75 @@ action_go_to_location_callback (GtkAction *action,
+ 	window = NAUTILUS_WINDOW (user_data);
+ 
+ 	nautilus_window_prompt_for_location (window, NULL);
+-}			   
++}
++
++/* The ctrl-f Keyboard shortcut always enables, rather than toggles
++   the search mode */
++static void
++action_show_search_callback (GtkAction *action,
++			     gpointer user_data)
++{
++	GtkAction *search_action;
++	NautilusNavigationWindow *window;
++
++	window = NAUTILUS_NAVIGATION_WINDOW (user_data);
++
++	search_action =
++		gtk_action_group_get_action (window->details->navigation_action_group,
++					      NAUTILUS_ACTION_SEARCH);
++
++	if (gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (search_action))) {
++		/* Already visible, just show it */
++		nautilus_navigation_window_show_search (window);
++	} else {
++		/* Otherwise, enable */
++		gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (search_action),
++					      TRUE);
++	}
++}
+ 
+ static void
+-action_search_callback (GtkAction *action,
+-			gpointer user_data)
++action_show_hide_search_callback (GtkAction *action,
++				  gpointer user_data)
+ {
+ 	NautilusNavigationWindow *window;
+ 
+ 	window = NAUTILUS_NAVIGATION_WINDOW (user_data);
+ 
+-	nautilus_navigation_window_show_search (window);
++	if (gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (action))) {
++		nautilus_navigation_window_show_search (window);
++	} else {
++		NautilusWindowSlot *slot;
++		GFile *location = NULL;
++
++		slot = NAUTILUS_WINDOW (window)->details->active_slot;
++
++		/* Use the location bar as the return location */
++		if (slot->query_editor == NULL){
++			location = nautilus_window_slot_get_location (slot);
++		/* Use the search location as the return location */
++		} else {
++			NautilusQuery *query;
++			char *uri;
++
++			query = nautilus_query_editor_get_query (slot->query_editor);
++			uri = nautilus_query_get_location (query);
++			if (uri != NULL) {
++				location = g_file_new_for_uri (uri);
++				g_free (uri);
++			}
++		}
++
++		/* Last try: use the home directory as the return location */
++		if (location == NULL) {
++			location = g_file_new_for_path (g_get_home_dir ());
++		}
++
++		nautilus_window_go_to (NAUTILUS_WINDOW (window), location);
++		g_object_unref (location);
++
++		nautilus_navigation_window_hide_search (window);
++	}
+ }
+ 
+ static void
+@@ -819,9 +877,6 @@ static const GtkActionEntry navigation_entries[] = {
+   /* name, stock id, label */  { "Edit Bookmarks", NULL, N_("_Edit Bookmarks..."),
+                                  "<control>b", N_("Display a window that allows editing the bookmarks in this menu"),
+                                  G_CALLBACK (action_edit_bookmarks_callback) },
+-  /* name, stock id, label */  { "Search", "gtk-find", N_("_Search for Files..."),
+-                                 "<control>F", N_("Locate documents and folders on this computer by name or content"),
+-                                 G_CALLBACK (action_search_callback) },
+ 
+ 	{ "TabsPrevious", NULL, N_("_Previous Tab"), "<control>Page_Up",
+ 	  N_("Activate previous tab"),
+@@ -835,7 +890,9 @@ static const GtkActionEntry navigation_entries[] = {
+ 	{ "TabsMoveRight", NULL, N_("Move Tab _Right"), "<shift><control>Page_Down",
+ 	  N_("Move current tab to right"),
+ 	  G_CALLBACK (action_tabs_move_right_callback) },
+-
++	{ "ShowSearch", NULL, N_("Show search"), "<control>f",
++	  N_("Show search"),
++	  G_CALLBACK (action_show_search_callback) }
+ };
+ 
+ static const GtkToggleActionEntry navigation_toggle_entries[] = {
+@@ -858,7 +915,13 @@ static const GtkToggleActionEntry navigation_toggle_entries[] = {
+   /* label, accelerator */   N_("St_atusbar"), NULL,
+   /* tooltip */              N_("Change the visibility of this window's statusbar"),
+                              G_CALLBACK (action_show_hide_statusbar_callback),
+-  /* is_active */            TRUE }, 
++  /* is_active */            TRUE },
++  /* name, stock id */     { "Search", "gtk-find",
++  /* label, accelerator */   N_("_Search for Files..."),
++			     /* Accelerator is in ShowSearch */"",
++  /* tooltip */              N_("Search documents and folders by name"),
++                             G_CALLBACK (action_show_hide_search_callback),
++  /* is_active */            FALSE },
+ };
+ 
+ void 
+@@ -916,6 +979,9 @@ nautilus_navigation_window_initialize_actions (NautilusNavigationWindow *window)
+ 	action = gtk_action_group_get_action (action_group, NAUTILUS_ACTION_SEARCH);
+ 	g_object_set (action, "short_label", _("_Search"), NULL);
+ 
++	action = gtk_action_group_get_action (action_group, "ShowSearch");
++	gtk_action_set_sensitive (action, TRUE);
++
+ 	ui_manager = nautilus_window_get_ui_manager (NAUTILUS_WINDOW (window));
+ 
+ 	gtk_ui_manager_insert_action_group (ui_manager, action_group, 0);
+diff --git a/src/nautilus-navigation-window-ui.xml b/src/nautilus-navigation-window-ui.xml
+index 2ee9ae5..e50bb22 100644
+--- a/src/nautilus-navigation-window-ui.xml
++++ b/src/nautilus-navigation-window-ui.xml
+@@ -1,4 +1,5 @@
+ <ui>
++<accelerator action="ShowSearch"/>
+ <menubar name="MenuBar">
+ 	<menu action="File">
+ 		<placeholder name="New Items Placeholder">
+diff --git a/src/nautilus-navigation-window.c b/src/nautilus-navigation-window.c
+index b9601b9..5175118 100644
+--- a/src/nautilus-navigation-window.c
++++ b/src/nautilus-navigation-window.c
+@@ -424,11 +424,16 @@ nautilus_navigation_window_init (NautilusNavigationWindow *window)
+ 	gtk_toolbar_insert (GTK_TOOLBAR (location_bar),
+ 			    item, -1);
+ 
++	window->navigation_group = gtk_size_group_new (GTK_SIZE_GROUP_VERTICAL);
++	gtk_size_group_set_ignore_hidden (window->navigation_group, FALSE);
++
+ 	window->details->location_button = location_button_create (window);
++	gtk_size_group_add_widget (window->navigation_group, window->details->location_button);
+ 	gtk_box_pack_start (GTK_BOX (hbox), window->details->location_button, FALSE, FALSE, 0);
+ 	gtk_widget_show (window->details->location_button);
+ 
+ 	window->path_bar = g_object_new (NAUTILUS_TYPE_PATH_BAR, NULL);
++	gtk_size_group_add_widget (window->navigation_group, window->path_bar);
+  	gtk_widget_show (window->path_bar);
+ 	
+ 	g_signal_connect_object (window->path_bar, "path_clicked",
+@@ -441,6 +446,7 @@ nautilus_navigation_window_init (NautilusNavigationWindow *window)
+ 			    TRUE, TRUE, 0);
+ 
+ 	window->navigation_bar = nautilus_location_bar_new (window);
++	gtk_size_group_add_widget (window->navigation_group, window->navigation_bar);
+ 	g_signal_connect_object (window->navigation_bar, "location_changed",
+ 				 G_CALLBACK (navigation_bar_location_changed_callback), window, 0);
+ 	g_signal_connect_object (window->navigation_bar, "cancel",
+@@ -451,6 +457,7 @@ nautilus_navigation_window_init (NautilusNavigationWindow *window)
+ 			    TRUE, TRUE, 0);
+ 
+ 	window->search_bar = nautilus_search_bar_new ();
++	gtk_size_group_add_widget (window->navigation_group, window->search_bar);
+ 	g_signal_connect_object (window->search_bar, "activate",
+ 				 G_CALLBACK (search_bar_activate_callback), window, 0);
+ 	g_signal_connect_object (window->search_bar, "cancel",
+@@ -753,6 +760,7 @@ hide_temporary_bars (NautilusNavigationWindow *window)
+ 		} else {
+ 			nautilus_navigation_window_set_bar_mode (window, NAUTILUS_BAR_NAVIGATION);
+ 		}
++		nautilus_navigation_window_set_search_button (window, FALSE);
+ 		window->details->temporary_search_bar = FALSE;
+ 		success = TRUE;
+ 	}
+@@ -1519,10 +1527,30 @@ nautilus_navigation_window_show_search (NautilusNavigationWindow *window)
+ 		window->details->temporary_search_bar = TRUE;
+ 		nautilus_search_bar_clear (NAUTILUS_SEARCH_BAR (window->search_bar));
+ 	}
+-	
++
+ 	nautilus_search_bar_grab_focus (NAUTILUS_SEARCH_BAR (window->search_bar));
+ }
+ 
++void
++nautilus_navigation_window_hide_search (NautilusNavigationWindow *window)
++{
++	if (nautilus_navigation_window_search_bar_showing (window)) {
++		if (hide_temporary_bars (window)) {
++			restore_focus_widget (window);
++		}
++	}
++}
++
++void
++nautilus_navigation_window_set_search_button (NautilusNavigationWindow *window,
++					      gboolean state)
++{
++	GtkAction *action;
++
++	action = gtk_action_group_get_action (window->details->navigation_action_group, "Search");
++	gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (action), state);
++}
++
+ /* either called due to slot change, or due to location change in the current slot. */
+ static void
+ real_sync_search_widgets (NautilusWindow *window)
+@@ -1709,17 +1737,20 @@ nautilus_navigation_window_set_bar_mode (NautilusNavigationWindow *window,
+ 					 NautilusBarMode mode)
+ {
+ 	gboolean use_entry;
++	GtkWidget *focus_widget;
+ 
+ 	switch (mode) {
+ 
+ 	case NAUTILUS_BAR_PATH:
+ 		gtk_widget_show (window->path_bar);
++		gtk_widget_show (window->details->location_button);
+ 		gtk_widget_hide (window->navigation_bar);
+ 		gtk_widget_hide (window->search_bar);
+ 		break;
+ 
+ 	case NAUTILUS_BAR_NAVIGATION:
+ 		gtk_widget_show (window->navigation_bar);
++		gtk_widget_show (window->details->location_button);
+ 		gtk_widget_hide (window->path_bar);
+ 		gtk_widget_hide (window->search_bar);
+ 		break;
+@@ -1728,6 +1759,7 @@ nautilus_navigation_window_set_bar_mode (NautilusNavigationWindow *window,
+ 		gtk_widget_show (window->search_bar);
+ 		gtk_widget_hide (window->path_bar);
+ 		gtk_widget_hide (window->navigation_bar);
++		gtk_widget_hide (window->details->location_button);
+ 		break;
+ 	}
+ 
+@@ -1743,6 +1775,16 @@ nautilus_navigation_window_set_bar_mode (NautilusNavigationWindow *window,
+ 						   G_CALLBACK (location_button_toggled_cb),
+ 						   window);
+ 	}
++
++	focus_widget = gtk_window_get_focus (GTK_WINDOW (window));
++	if (focus_widget != NULL && !is_in_temporary_navigation_bar (focus_widget, window) &&
++				    !is_in_temporary_search_bar (focus_widget, window)) {
++		if (mode == NAUTILUS_BAR_NAVIGATION || mode == NAUTILUS_BAR_PATH) {
++			nautilus_navigation_window_set_search_button (window, FALSE);
++		} else {
++			nautilus_navigation_window_set_search_button (window, TRUE);
++		}
++	}
+ }
+ 
+ gboolean
+diff --git a/src/nautilus-navigation-window.h b/src/nautilus-navigation-window.h
+index e34a978..9c6a5f8 100644
+--- a/src/nautilus-navigation-window.h
++++ b/src/nautilus-navigation-window.h
+@@ -64,9 +64,12 @@ struct _NautilusNavigationWindow {
+         /** UI stuff **/
+         NautilusSidePane *sidebar;
+         GtkWidget *view_as_combo_box;
++
++        GtkSizeGroup *navigation_group;
+         GtkWidget *navigation_bar;
+ 	GtkWidget *path_bar;
+         GtkWidget *search_bar;
++
+ 	GtkWidget *notebook;
+ 
+         /* Current views stuff */
+@@ -120,5 +123,8 @@ void     nautilus_navigation_window_back_or_forward      (NautilusNavigationWind
+                                                           guint                     distance,
+ 							  gboolean                  new_tab);
+ void     nautilus_navigation_window_show_search          (NautilusNavigationWindow *window);
++void     nautilus_navigation_window_hide_search          (NautilusNavigationWindow *window);
++void     nautilus_navigation_window_set_search_button	  (NautilusNavigationWindow *window,
++							   gboolean		    state);
+ 
+ #endif
+diff --git a/src/nautilus-query-editor.c b/src/nautilus-query-editor.c
+index 5cd442e..3ab8697 100644
+--- a/src/nautilus-query-editor.c
++++ b/src/nautilus-query-editor.c
+@@ -1157,6 +1157,10 @@ nautilus_query_editor_get_query (NautilusQueryEditor *editor)
+ 	GList *l;
+ 	NautilusQueryEditorRow *row;
+ 
++	if (editor == NULL || editor->details == NULL || editor->details->entry == NULL) {
++		return NULL;
++	}
++
+ 	query_text = gtk_entry_get_text (GTK_ENTRY (editor->details->entry));
+ 
+ 	/* Empty string is a NULL query */
+--
+cgit v0.8.3.1

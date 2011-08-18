@@ -1,0 +1,21 @@
+diff -up nautilus-2.27.4/libnautilus-private/apps_nautilus_preferences.schemas.in.config nautilus-2.27.4/libnautilus-private/apps_nautilus_preferences.schemas.in
+--- nautilus-2.27.4/libnautilus-private/apps_nautilus_preferences.schemas.in.config	2009-08-12 21:07:44.331994084 -0400
++++ nautilus-2.27.4/libnautilus-private/apps_nautilus_preferences.schemas.in	2009-08-12 21:26:31.258991695 -0400
+@@ -169,7 +169,7 @@
+       <owner>nautilus</owner>
+       <type>list</type>
+       <list_type>string</list_type>
+-      <default>[x-content/software]</default>
++      <default>[]</default>
+       <locale name="C">
+          <short>List of x-content/* types where the preferred application will be launched</short>
+          <long>
+@@ -187,7 +187,7 @@
+       <owner>nautilus</owner>
+       <type>list</type>
+       <list_type>string</list_type>
+-      <default>[]</default>
++      <default>[x-content/software]</default>
+       <locale name="C">
+          <short>List of x-content/* types set to "Do Nothing"</short>
+          <long>

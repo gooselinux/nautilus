@@ -1,0 +1,246 @@
+From 24c255075404f9c2a8205e9133bc60cc7bf059bf Mon Sep 17 00:00:00 2001
+From: Tomas Bzatek <tbzatek@redhat.com>
+Date: Fri, 21 May 2010 17:11:25 +0200
+Subject: [PATCH] Make Connect to Server Custom Location work again
+
+This stopped working during migration to GIO. This patch also makes
+the 'Connect' button insensitive when server name or custom location
+entries are empty.
+
+See bug 601848 for reference.
+---
+ src/nautilus-connect-server-dialog.c |  126 ++++++++++++++++++++--------------
+ 1 files changed, 75 insertions(+), 51 deletions(-)
+
+diff --git a/src/nautilus-connect-server-dialog.c b/src/nautilus-connect-server-dialog.c
+index cbae534..bd5d429 100644
+--- a/src/nautilus-connect-server-dialog.c
++++ b/src/nautilus-connect-server-dialog.c
+@@ -180,88 +180,74 @@ connect_to_server (NautilusConnectServerDialog *dialog)
+ 	g_assert (index < G_N_ELEMENTS (methods) && index >= 0);
+ 	meth = &(methods[index]);
+ 
+-	uri = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->server_entry), 0, -1);
+-	if (strlen (uri) == 0) {
+-		eel_show_error_dialog (_("Cannot Connect to Server. You must enter a name for the server."), 
+-				       _("Please enter a name and try again."), 
+-				       GTK_WINDOW (dialog));
+-		g_free (uri);
+-		return;
+-	}
+-
+ 	if (meth->scheme == NULL) {
+ 		uri = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->uri_entry), 0, -1);
+ 		/* FIXME: we should validate it in some way? */
++		if (strlen (uri) == 0) {
++			g_free (uri);
++			return;
++		}
+ 	} else {
+ 		char *user, *port, *initial_path, *server, *folder, *domain;
+ 		char *t, *join;
+-		gboolean free_initial_path, free_user, free_domain, free_port;
+ 		
+-		server = uri;
+-		uri = NULL;
++		server = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->server_entry), 0, -1);
++		if (strlen (server) == 0) {
++			g_free (server);
++			return;
++		}
+ 
+-		user = "";
+-		port = "";
+-		initial_path = "";
+-		domain = "";
+-		free_initial_path = FALSE;
+-		free_user = FALSE;
+-		free_domain = FALSE;
+-		free_port = FALSE;
++		uri = NULL;
++		user = NULL;
++		port = NULL;
++		initial_path = NULL;
++		domain = NULL;
+ 		
+ 		/* FTP special case */
+ 		if (meth->flags & IS_ANONYMOUS) {
+-			user = "anonymous";
++			user = g_strdup ("anonymous");
+ 		
+ 		/* SMB special case */
+ 		} else if (strcmp (meth->scheme, "smb") == 0) {
+ 			t = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->share_entry), 0, -1);
+ 			initial_path = g_strconcat ("/", t, NULL);
+-			free_initial_path = TRUE;
+ 			g_free (t);
+ 		}
+ 
+ 		if (dialog->details->port_entry->parent != NULL) {
+-			free_port = TRUE;
+ 			port = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->port_entry), 0, -1);
+ 		}
+ 		folder = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->folder_entry), 0, -1);
+ 		if (dialog->details->user_entry->parent != NULL) {
+-			free_user = TRUE;
+-			
+ 			t = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->user_entry), 0, -1);
+ 
++			g_free (user);
+ 			user = g_uri_escape_string (t, G_URI_RESERVED_CHARS_ALLOWED_IN_USERINFO, FALSE);
+ 
+ 			g_free (t);
+ 		}
+ 		if (dialog->details->domain_entry->parent != NULL) {
+-			free_domain = TRUE;
+-
+ 			domain = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->domain_entry), 0, -1);
+ 			
+ 			if (strlen (domain) != 0) {
+ 				t = user;
+-
+ 				user = g_strconcat (domain , ";" , t, NULL);
+-
+-				if (free_user) {
+-					g_free (t);
+-				}
+-
+-				free_user = TRUE;
++				g_free (t);
+ 			}
++
++			g_free (domain);
+ 		}
+ 
+-		if (folder[0] != 0 &&
+-		    folder[0] != '/') {
++		if (folder && folder[0] != 0
++			   && folder[0] != '/') {
+ 			join = "/";
+ 		} else {
+ 			join = "";
+ 		}
+ 
+ 		t = folder;
+-		folder = g_strconcat (initial_path, join, t, NULL);
++		folder = g_strconcat (initial_path ? initial_path : "",
++		                      join, t, NULL);
+ 		g_free (t);
+ 
+ 		t = folder;
+@@ -270,25 +256,18 @@ connect_to_server (NautilusConnectServerDialog *dialog)
+ 
+ 		uri = g_strdup_printf ("%s://%s%s%s%s%s%s",
+ 				       meth->scheme,
+-				       user, (user[0] != 0) ? "@" : "",
++				       user ? user : "",
++				       (user && user[0] != 0) ? "@" : "",
+ 				       server,
+-				       (port[0] != 0) ? ":" : "", port,
++				       (port && port[0] != 0) ? ":" : "",
++				       port ? port : "",
+ 				       folder);
+ 
+-		if (free_initial_path) {
+-			g_free (initial_path);
+-		}
++		g_free (initial_path);
+ 		g_free (server);
+-		if (free_port) {
+-			g_free (port);
+-		}
++		g_free (port);
+ 		g_free (folder);
+-		if (free_user) {
+-			g_free (user);
+-		}
+-		if (free_domain) {
+-			g_free (domain);
+-		}
++		g_free (user);
+ 	}
+ 
+ 	gtk_widget_hide (GTK_WIDGET (dialog));
+@@ -365,6 +344,43 @@ nautilus_connect_server_dialog_class_init (NautilusConnectServerDialogClass *cla
+ }
+ 
+ static void
++update_connect_button_visibility (NautilusConnectServerDialog *dialog)
++{
++
++	struct MethodInfo *meth;
++	GtkTreeIter iter;
++	int index;
++	char *s;
++	
++	gtk_combo_box_get_active_iter (GTK_COMBO_BOX (dialog->details->type_combo), &iter);
++	gtk_tree_model_get (gtk_combo_box_get_model (GTK_COMBO_BOX (dialog->details->type_combo)),
++			    &iter, 0, &index, -1);
++	g_assert (index < G_N_ELEMENTS (methods) && index >= 0);
++	meth = &(methods[index]);
++
++	s = NULL;
++	if (meth->scheme == NULL) {
++		s = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->uri_entry), 0, -1);
++	} else {
++		s = gtk_editable_get_chars (GTK_EDITABLE (dialog->details->server_entry), 0, -1);
++	}
++
++	gtk_dialog_set_response_sensitive (GTK_DIALOG (dialog), RESPONSE_CONNECT,
++					   strlen (s) > 0);
++	g_free (s);
++}
++
++
++static void
++server_entry_changed (GtkWidget *combo_box,
++                      gpointer   user_data)
++{
++	NautilusConnectServerDialog *dialog = NAUTILUS_CONNECT_SERVER_DIALOG (user_data);
++
++	update_connect_button_visibility (dialog);
++}
++
++static void
+ setup_for_type (NautilusConnectServerDialog *dialog)
+ {
+ 	struct MethodInfo *meth;
+@@ -655,6 +671,7 @@ display_server_location (NautilusConnectServerDialog *dialog, GFile *location)
+ 	
+ 	gtk_combo_box_set_active (GTK_COMBO_BOX (dialog->details->type_combo), index);
+ 	setup_for_type (dialog);
++	update_connect_button_visibility (dialog);
+ 	
+ 	/* Custom URI */
+ 	if (meth->scheme == NULL) {
+@@ -739,6 +756,7 @@ combo_changed_callback (GtkComboBox *combo_box,
+ 			NautilusConnectServerDialog *dialog)
+ {
+ 	setup_for_type (dialog);
++	update_connect_button_visibility (dialog);
+ }
+ 
+ static void
+@@ -905,6 +923,10 @@ nautilus_connect_server_dialog_init (NautilusConnectServerDialog *dialog)
+ 
+ 	g_signal_connect (dialog->details->bookmark_check, "toggled", 
+ 			  G_CALLBACK (bookmark_checkmark_toggled), dialog);
++	g_signal_connect (dialog->details->server_entry, "changed",
++			  G_CALLBACK (server_entry_changed), dialog);
++	g_signal_connect (dialog->details->uri_entry, "changed",
++			  G_CALLBACK (server_entry_changed), dialog);
+ 
+ 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (dialog->details->bookmark_check), FALSE);
+ 	gtk_widget_set_sensitive (GTK_WIDGET(dialog->details->name_entry), FALSE);
+@@ -943,6 +965,8 @@ nautilus_connect_server_dialog_init (NautilusConnectServerDialog *dialog)
+ 	gtk_dialog_set_default_response (GTK_DIALOG (dialog),
+ 					 RESPONSE_CONNECT);
+ 
++	update_connect_button_visibility (dialog);
++
+ 	g_signal_connect (dialog, "response",
+ 			  G_CALLBACK (response_callback),
+ 			  dialog);
+-- 
+1.6.5.2
+

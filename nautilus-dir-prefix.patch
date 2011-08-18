@@ -1,0 +1,66 @@
+diff -up nautilus-2.28.4/libnautilus-private/nautilus-file-utilities.c.dir-prefix nautilus-2.28.4/libnautilus-private/nautilus-file-utilities.c
+--- nautilus-2.28.4/libnautilus-private/nautilus-file-utilities.c.dir-prefix	2009-12-09 06:03:51.000000000 -0500
++++ nautilus-2.28.4/libnautilus-private/nautilus-file-utilities.c	2010-03-26 12:41:11.800012545 -0400
+@@ -122,14 +122,16 @@ nautilus_get_user_directory (void)
+ char *
+ nautilus_get_accel_map_file (void)
+ {
+-	const gchar *home;
++        const gchar *override;
+ 
+-	home = g_get_home_dir();
+-	if (home != NULL) {
+-		return g_build_filename (home, ".gnome2/accels/nautilus", NULL);
+-	}
++        override = g_getenv ("GNOME22_USER_DIR");
+ 
+-	return NULL;
++        if (override) {
++                return g_build_filename (override, "accels/nautilus", NULL);
++        }
++        else {
++		return g_build_filename (g_get_home_dir (), ".gnome2/accels/nautilus", NULL);
++	}
+ }
+ 
+ typedef struct {
+diff -up nautilus-2.28.4/src/file-manager/fm-directory-view.c.dir-prefix nautilus-2.28.4/src/file-manager/fm-directory-view.c
+--- nautilus-2.28.4/src/file-manager/fm-directory-view.c.dir-prefix	2010-03-26 13:57:34.472981120 -0400
++++ nautilus-2.28.4/src/file-manager/fm-directory-view.c	2010-03-26 13:59:58.776862468 -0400
+@@ -123,9 +123,6 @@
+ #define MAX_MENU_LEVELS 5
+ #define TEMPLATE_LIMIT 30
+ 
+-/* Directory where user scripts are placed */
+-#define NAUTILUS_SCRIPTS_DIR ".gnome2/nautilus-scripts"
+-
+ enum {
+ 	ADD_FILE,
+ 	BEGIN_FILE_CHANGES,
+@@ -1618,14 +1615,23 @@ static void
+ set_up_scripts_directory_global (void)
+ {
+ 	char *scripts_directory_path;
++	const char *override;
+ 
+ 	if (scripts_directory_uri != NULL) {
+ 		return;
+ 	}
+ 
+-	scripts_directory_path = g_build_filename (g_get_home_dir (),
+-						   NAUTILUS_SCRIPTS_DIR,
+-						   NULL);
++	override = g_getenv ("GNOME22_USER_DIR");
++
++	if (override)
++		scripts_directory_path = g_build_filename (override,
++							   "nautilus-scripts",
++							   NULL);
++	else
++		scripts_directory_path = g_build_filename (g_get_home_dir (),
++							   ".gnome2",
++							   "nautilus-scripts",
++							   NULL);
+ 
+ 	if (g_mkdir_with_parents (scripts_directory_path, 0755) == 0) {
+ 		scripts_directory_uri = g_filename_to_uri (scripts_directory_path, NULL, NULL);

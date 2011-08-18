@@ -1,0 +1,1761 @@
+diff -up nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.c.selinux nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.c
+--- nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.c.selinux	2009-02-10 18:49:53.000000000 +0100
++++ nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.c	2009-02-16 17:20:33.000000000 +0100
+@@ -34,6 +34,7 @@ enum {
+ 	PROP_LABEL,
+ 	PROP_DESCRIPTION,
+ 	PROP_XALIGN,
++	PROP_ELLIPSIZE,
+ 	LAST_PROP
+ };
+ 
+@@ -43,6 +44,7 @@ struct _NautilusColumnDetails {
+ 	char *label;
+ 	char *description;
+ 	float xalign;
++	gboolean ellipsize;
+ };
+ 
+ G_DEFINE_TYPE (NautilusColumn, nautilus_column, G_TYPE_OBJECT);
+@@ -110,6 +112,9 @@ nautilus_column_get_property (GObject *o
+ 	case PROP_XALIGN :
+ 		g_value_set_float (value, column->details->xalign);
+ 		break;
++	case PROP_ELLIPSIZE :
++		g_value_set_boolean (value, column->details->ellipsize);
++		break;
+ 	default :
+ 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, param_id, pspec);
+ 		break;
+@@ -151,6 +156,10 @@ nautilus_column_set_property (GObject *o
+ 		column->details->xalign = g_value_get_float (value);
+ 		g_object_notify (object, "xalign");		
+ 		break;
++	case PROP_ELLIPSIZE :
++		column->details->ellipsize = g_value_get_boolean (value);
++		g_object_notify (object, "ellipsize");		
++		break;
+ 	default :
+ 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, param_id, pspec);
+ 		break;
+@@ -178,6 +187,7 @@ nautilus_column_init (NautilusColumn *co
+ {
+ 	column->details = g_new0 (NautilusColumnDetails, 1);
+ 	column->details->xalign = 0.0;
++	column->details->ellipsize = FALSE;
+ }
+ 
+ static void
+@@ -232,5 +242,12 @@ nautilus_column_class_init (NautilusColu
+ 							     1.0,
+ 							     0.0,
+ 							     G_PARAM_READWRITE));
++	g_object_class_install_property (G_OBJECT_CLASS (class),
++					 PROP_ELLIPSIZE,
++					 g_param_spec_boolean ("ellipsize",
++							       "ellipsize",
++							       "Ellipsize text in the column if it's too long to display",
++							       FALSE,
++							       G_PARAM_READWRITE));
+ }
+ 
+diff -up nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.h.selinux nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.h
+--- nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.h.selinux	2008-09-14 14:14:27.000000000 +0200
++++ nautilus-2.25.91-wrk/libnautilus-extension/nautilus-column.h	2009-02-16 17:20:33.000000000 +0100
+@@ -64,6 +64,7 @@ NautilusColumn *  nautilus_column_new   
+  *   label (string)       - the user-visible label for the column
+  *   description (string) - a user-visible description of the column
+  *   xalign (float)       - x-alignment of the column 
++ *   ellipsize (boolean)  - ellipsize text in the column?
+  */
+ 
+ G_END_DECLS
+diff -up nautilus-2.25.91-wrk/libnautilus-private/nautilus-column-utilities.c.selinux nautilus-2.25.91-wrk/libnautilus-private/nautilus-column-utilities.c
+--- nautilus-2.25.91-wrk/libnautilus-private/nautilus-column-utilities.c.selinux	2008-09-14 14:14:27.000000000 +0200
++++ nautilus-2.25.91-wrk/libnautilus-private/nautilus-column-utilities.c	2009-02-16 17:20:33.000000000 +0100
+@@ -119,6 +119,7 @@ get_builtin_columns (void)
+ 					       "attribute", "selinux_context",
+ 					       "label", _("SELinux Context"),
+ 					       "description", _("The SELinux security context of the file."),
++					       "ellipsize", TRUE,
+ 					       NULL));
+ 	columns = g_list_append (columns,
+ 				 g_object_new (NAUTILUS_TYPE_COLUMN,
+diff -up nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.c.selinux nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.c
+--- nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.c.selinux	2009-02-16 09:45:37.000000000 +0100
++++ nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.c	2009-02-16 17:20:33.000000000 +0100
+@@ -1634,7 +1634,7 @@ update_info_internal (NautilusFile *file
+ 	file->details->is_mountpoint = is_mountpoint;
+ 
+ 	has_permissions = g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_UNIX_MODE);
+-	permissions = g_file_info_get_attribute_uint32 (info, G_FILE_ATTRIBUTE_UNIX_MODE);;
++	permissions = g_file_info_get_attribute_uint32 (info, G_FILE_ATTRIBUTE_UNIX_MODE);
+ 	if (file->details->has_permissions != has_permissions ||
+ 	    file->details->permissions != permissions) {
+ 		changed = TRUE;
+@@ -4393,7 +4393,7 @@ nautilus_file_can_get_selinux_context (N
+  * context
+  * @file: NautilusFile representing the file in question.
+  * 
+- * Returns: Newly allocated string ready to display to the user.
++ * Returns: Newly allocated string ready to display to the user, or NULL.
+  * 
+  **/
+ char *
+@@ -4426,6 +4426,114 @@ nautilus_file_get_selinux_context (Nauti
+ 	return translated;
+ }
+ 
++/**
++ * nautilus_file_get_selinux_matchpathcon:
++ * 
++ * Get a user-displayable string representing a file's default selinux
++ * context (as from matchpathcon). Only works on local files.
++ * @file: NautilusFile representing the file in question.
++ * 
++ * Returns: Newly allocated string ready to display to the user, or NULL.
++ * 
++ **/
++char *
++nautilus_file_get_selinux_matchpathcon (NautilusFile *file)
++{
++	char *translated;
++#ifdef HAVE_SELINUX
++	char *raw;
++	char *fname;
++	GFile *location;
++#endif
++	
++	g_return_val_if_fail (NAUTILUS_IS_FILE (file), NULL);
++
++	translated = NULL;
++#ifdef HAVE_SELINUX
++	location = nautilus_file_get_location (file);
++	fname = g_file_get_path (location);
++	
++	if (!fname) {
++	        return NULL;
++	}
++
++	raw = NULL;
++	if (matchpathcon (fname, file->details->permissions, &raw) == 0) {
++		if (selinux_raw_to_trans_context (raw, &translated) == 0) {
++			char *tmp;
++			tmp = g_strdup (translated);
++			freecon (translated);
++			translated = tmp;
++		}
++		freecon (raw);
++	}
++		      
++	g_free (fname);
++	g_object_unref (location);
++#endif
++	
++	return translated;
++}
++
++void
++nautilus_file_set_selinux_context (NautilusFile *file, 
++				   const char *selinux_context,
++				   NautilusFileOperationCallback callback,
++				   gpointer callback_data)
++{
++	GFileInfo *info;
++	GError *error;
++	char *rcontext;
++
++	rcontext = NULL;
++	
++	/* this is probably mostly right... */
++	if (!nautilus_file_can_set_permissions (file)) {
++		/* Claim that something changed even if the permission change failed.
++		 * This makes it easier for some clients who see the "reverting"
++		 * to the old permissions as "changing back".
++		 */
++		nautilus_file_changed (file);
++		error = g_error_new (G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
++				     _("Not allowed to set SELinux security context"));
++		(* callback) (file, NULL, error, callback_data);
++		g_error_free (error);
++		return;
++	}
++			       
++	/* Test the permissions-haven't-changed case explicitly
++	 * because we don't want to send the file-changed signal if
++	 * nothing changed.
++	 */
++	if (file->details->selinux_context != NULL &&
++	    strcmp(selinux_context, file->details->selinux_context) == 0) {
++		(* callback) (file, NULL, NULL, callback_data);
++		return;
++	}
++
++#ifdef HAVE_SELINUX
++	/* this is really const, but prototype is wrong, *sigh* */
++	if (selinux_trans_to_raw_context((char *)selinux_context, &rcontext)) {
++		error = g_error_new (G_IO_ERROR, G_IO_ERROR_INVAL,
++				     _("Invalid SELinux security context"));
++		(* callback) (file, NULL, error, callback_data);
++		g_error_free (error);
++		return;
++	}
++	selinux_context = rcontext;
++#endif
++			       
++	info = g_file_info_new ();
++	g_file_info_set_attribute_string (info, G_FILE_ATTRIBUTE_SELINUX_CONTEXT, selinux_context);
++	nautilus_file_set_attributes (file, info, callback, callback_data);
++	g_object_unref (info);
++
++#ifdef HAVE_SELINUX
++	freecon (rcontext);
++#endif
++}
++
++
+ static char *
+ get_real_name (const char *name, const char *gecos)
+ {
+diff -up nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.h.selinux nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.h
+--- nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.h.selinux	2009-02-02 13:28:32.000000000 +0100
++++ nautilus-2.25.91-wrk/libnautilus-private/nautilus-file.h	2009-02-16 17:20:33.000000000 +0100
+@@ -244,6 +244,7 @@ GList *                 nautilus_get_all
+ GList *                 nautilus_file_get_settable_group_names          (NautilusFile                   *file);
+ gboolean                nautilus_file_can_get_selinux_context           (NautilusFile                   *file);
+ char *                  nautilus_file_get_selinux_context               (NautilusFile                   *file);
++char *                  nautilus_file_get_selinux_matchpathcon          (NautilusFile                   *file);
+ 
+ /* "Capabilities". */
+ gboolean                nautilus_file_can_read                          (NautilusFile                   *file);
+@@ -278,6 +279,10 @@ void                    nautilus_file_se
+ 									 guint32                         permissions,
+ 									 NautilusFileOperationCallback   callback,
+ 									 gpointer                        callback_data);
++void                    nautilus_file_set_selinux_context               (NautilusFile *file, 
++									 const char *selinux_context,
++									 NautilusFileOperationCallback callback,
++									 gpointer callback_data);
+ void                    nautilus_file_rename                            (NautilusFile                   *file,
+ 									 const char                     *new_name,
+ 									 NautilusFileOperationCallback   callback,
+diff -up nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.c.selinux nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.c
+--- nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.c.selinux	2009-02-02 13:28:32.000000000 +0100
++++ nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.c	2009-02-16 17:20:33.000000000 +0100
+@@ -67,6 +67,11 @@
+ #include "nautilus-trash-monitor.h"
+ #include "nautilus-file-utilities.h"
+ 
++#ifdef HAVE_SELINUX 
++    #include <selinux/selinux.h> 
++#endif 
++
++
+ static gboolean confirm_trash_auto_value;
+ 
+ /* TODO: TESTING!!! */
+@@ -140,6 +145,7 @@ typedef struct {
+ 	guint32 file_mask;
+ 	guint32 dir_permissions;
+ 	guint32 dir_mask;
++	char *context;
+ } SetPermissionsJob;
+ 
+ typedef enum {
+@@ -5141,6 +5147,10 @@ set_permissions_job_done (gpointer user_
+ 		job->done_callback (job->done_callback_data);
+ 	}
+ 	
++	if (job->context) {
++		g_free (job->context);
++	}
++	
+ 	finalize_common ((CommonJob *)job);
+ 	return FALSE;
+ }
+@@ -5196,6 +5206,14 @@ set_permissions_file (SetPermissionsJob 
+ 					     current, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+ 					     common->cancellable, NULL);
+ 	}
++
++#ifdef HAVE_SELINUX
++	if (!job_aborted (common) && (job->context)) {
++		g_file_set_attribute_string (file, G_FILE_ATTRIBUTE_SELINUX_CONTEXT, 
++					     job->context, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
++					     common->cancellable, NULL);
++	}
++#endif
+ 	
+ 	if (!job_aborted (common) &&
+ 	    g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY) {
+@@ -5259,6 +5277,7 @@ nautilus_file_set_permissions_recursive 
+ 					 guint32         file_mask,
+ 					 guint32         dir_permissions,
+ 					 guint32         dir_mask,
++					 const char     *context, 
+ 					 NautilusOpCallback  callback,
+ 					 gpointer  callback_data)
+ {
+@@ -5272,7 +5291,24 @@ nautilus_file_set_permissions_recursive 
+ 	job->dir_mask = dir_mask;
+ 	job->done_callback = callback;
+ 	job->done_callback_data = callback_data;
+-	
++
++	if (context) {
++		char *rcontext;
++
++		rcontext = job->context = NULL;
++#ifdef HAVE_SELINUX
++		/* this is really const, but prototype is wrong, *sigh* */
++		if (selinux_trans_to_raw_context((char *)context, &rcontext)) {
++			g_error ("selinux_trans_to_raw_context: failed to allocate bytes");
++			return;
++		}
++		job->context = g_strdup (rcontext);
++		freecon (rcontext);
++#endif
++	} else {
++		job->context = NULL;
++	}
++
+ 	g_io_scheduler_push_job (set_permissions_job,
+ 			   job,
+ 			   NULL,
+diff -up nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.h.selinux nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.h
+--- nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.h.selinux	2008-09-14 14:14:27.000000000 +0200
++++ nautilus-2.25.91-wrk/libnautilus-private/nautilus-file-operations.h	2009-02-16 17:20:33.000000000 +0100
+@@ -85,6 +85,7 @@ void nautilus_file_set_permissions_recur
+ 					      guint32                         file_mask,
+ 					      guint32                         folder_permissions,
+ 					      guint32                         folder_mask,
++					      const char                     *context,
+ 					      NautilusOpCallback              callback,
+ 					      gpointer                        callback_data);
+ 
+diff -up nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.c.selinux nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.c
+--- nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.c.selinux	2008-09-14 14:14:22.000000000 +0200
++++ nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.c	2009-02-16 17:20:33.000000000 +0100
+@@ -232,6 +232,31 @@ fm_report_error_setting_permissions (Nau
+ 	g_free (message);
+ }		
+ 
++void
++fm_report_error_setting_selinux (NautilusFile *file,
++		       	         GError *error,
++		       	         GtkWindow *parent_window)
++{
++	char *file_name;
++	char *message;
++
++	if (error == NULL) {
++		return;
++	}
++
++	file_name = nautilus_file_get_display_name (file);
++
++	message = g_strdup_printf (_("Sorry, couldn't change the permissions of \"%s\": %s"), file_name, error->message);
++
++	/*  Silently drop the error when called from selinux entry and is not finished yet */
++	if (! g_error_matches(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT)) {
++		eel_show_error_dialog (_("The SELinux security context could not be changed."), message, parent_window);
++	}
++
++	g_free (file_name);
++	g_free (message);
++}
++
+ typedef struct _FMRenameData {
+ 	char *name;
+ 	NautilusFileOperationCallback callback;
+diff -up nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.h.selinux nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.h
+--- nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.h.selinux	2008-10-06 12:49:08.000000000 +0200
++++ nautilus-2.25.91-wrk/src/file-manager/fm-error-reporting.h	2009-02-16 17:20:33.000000000 +0100
+@@ -40,8 +40,11 @@ void fm_report_error_setting_permissions
+ 					  GError         *error,
+ 					  GtkWindow	 *parent_window);
+ void fm_report_error_setting_owner       (NautilusFile   *file,
+-					  GError         *error,  
++					  GError         *error,
+ 					  GtkWindow	 *parent_window);
++void fm_report_error_setting_selinux     (NautilusFile   *file,
++					  GError         *error,
++                                          GtkWindow      *parent_window);
+ void fm_report_error_setting_group       (NautilusFile   *file,
+ 					  GError         *error,
+ 					  GtkWindow	 *parent_window);
+diff -up nautilus-2.25.91-wrk/src/file-manager/fm-list-view.c.selinux nautilus-2.25.91-wrk/src/file-manager/fm-list-view.c
+--- nautilus-2.25.91-wrk/src/file-manager/fm-list-view.c.selinux	2008-12-09 09:45:47.000000000 +0100
++++ nautilus-2.25.91-wrk/src/file-manager/fm-list-view.c	2009-02-16 17:20:33.000000000 +0100
+@@ -1420,13 +1420,15 @@ create_and_set_up_tree_view (FMListView 
+ 		char *name;
+ 		char *label;
+ 		float xalign;
++		gboolean ellipsize;
+ 
+ 		nautilus_column = NAUTILUS_COLUMN (l->data);
+ 
+ 		g_object_get (nautilus_column, 
+ 			      "name", &name, 
+ 			      "label", &label,
+-			      "xalign", &xalign, NULL);
++			      "xalign", &xalign, 
++			      "ellipsize", &ellipsize, NULL);
+ 
+ 		column_num = fm_list_model_add_column (view->details->model,
+ 						       nautilus_column);
+@@ -1472,6 +1474,8 @@ create_and_set_up_tree_view (FMListView 
+ 		} else {		
+ 			cell = gtk_cell_renderer_text_new ();
+ 			g_object_set (cell, "xalign", xalign, NULL);
++			if (ellipsize)
++			    g_object_set (cell, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
+ 			view->details->cells = g_list_append (view->details->cells,
+ 							      cell);
+ 			column = gtk_tree_view_column_new_with_attributes (label,
+diff -up nautilus-2.25.91-wrk/src/file-manager/fm-properties-window.c.selinux nautilus-2.25.91-wrk/src/file-manager/fm-properties-window.c
+--- nautilus-2.25.91-wrk/src/file-manager/fm-properties-window.c.selinux	2009-02-16 09:45:36.000000000 +0100
++++ nautilus-2.25.91-wrk/src/file-manager/fm-properties-window.c	2009-02-16 17:20:33.000000000 +0100
+@@ -83,6 +83,10 @@
+ #define FREE_FILL_B  (0.811764706 * 65535)
+ 
+ 
++#ifdef HAVE_SELINUX
++# include <selinux/selinux.h>
++#endif
++
+ #define PREVIEW_IMAGE_WIDTH 96
+ 
+ #define ROW_PAD 6
+@@ -125,12 +129,15 @@ struct FMPropertiesWindowDetails {	
+ 	unsigned int  owner_change_timeout;
+ 
+ 	GList *permission_buttons;
+-	GList *permission_combos;
++	GList *permission_combos; /* how is this deallocated???? */
++	GList *selinux_combo;
+ 	GHashTable *initial_permissions;
+ 	gboolean has_recursive_apply;
+ 
+ 	GList *value_fields;
+ 
++	GList *edit_fields;
++
+ 	GList *mime_list;
+ 
+ 	gboolean deep_count_finished;
+@@ -217,6 +224,10 @@ static void permission_combo_update     
+ 						   GtkComboBox        *combo);
+ static void value_field_update                    (FMPropertiesWindow *window,
+ 						   GtkLabel           *field);
++static void edit_field_update                     (FMPropertiesWindow *window,
++						   GtkEntry           *field);
++static void popup_field_update                    (FMPropertiesWindow *window,
++						   GtkComboBox        *entry);
+ static void properties_window_update              (FMPropertiesWindow *window,
+ 						   GList              *files);
+ static void is_directory_ready_callback           (NautilusFile       *file,
+@@ -246,10 +257,36 @@ static GtkLabel *attach_ellipsizing_valu
+ 						   const char *initial_text);
+ 						   
+ static GtkWidget* create_pie_widget 		  (FMPropertiesWindow *window);
++  
++static void attach_selinux_data_edit_field        (GtkEntry *entry, 
++                                                   char *attr_value, 
++                                                   char *def_attr_value); 
++ 
++#ifdef HAVE_SELINUX 
++static void attach_selinux_data_popup_field       (GtkComboBox *comb, 
++                                                   char *attr_val, 
++                                                   char *def_attr_val); 
++#endif 
++
+ 
+ G_DEFINE_TYPE (FMPropertiesWindow, fm_properties_window, GTK_TYPE_DIALOG);
+ #define parent_class fm_properties_window_parent_class 
+ 
++static void
++maybe_gtk_entry_set_text (GtkEntry *entry, const char *val)
++{
++	char *old_val;
++
++	g_assert (GTK_IS_ENTRY (entry));
++
++	old_val = gtk_editable_get_chars (GTK_EDITABLE (entry), 0, -1);
++
++	if (strcmp (old_val, val) != 0) {
++		gtk_entry_set_text (entry, val);
++	}
++	g_free(old_val);
++}
++
+ static gboolean
+ is_multi_file_window (FMPropertiesWindow *window)
+ {
+@@ -270,6 +307,111 @@ is_multi_file_window (FMPropertiesWindow
+ 	return FALSE;
+ }
+ 
++static gboolean
++all_can_get_permissions (GList *file_list)
++{
++	GList *l;
++	for (l = file_list; l != NULL; l = l->next) {
++		NautilusFile *file;
++		
++		file = NAUTILUS_FILE (l->data);
++		
++		if (!nautilus_file_can_get_permissions (file)) {
++			return FALSE;
++		}
++	}
++
++	return TRUE;
++}
++
++static gboolean
++all_can_set_permissions (GList *file_list)
++{
++	GList *l;
++	for (l = file_list; l != NULL; l = l->next) {
++		NautilusFile *file;
++		
++		file = NAUTILUS_FILE (l->data);
++
++		if (!nautilus_file_can_set_permissions (file)) {
++			return FALSE;
++		}
++	}
++
++	return TRUE;
++}
++
++#ifdef HAVE_SELINUX
++static gboolean
++multi_have_same_selinux_context (FMPropertiesWindow *window)
++{
++	GList *l;
++        char *cntx;
++
++	cntx = NULL;
++	for (l = window->details->original_files; l != NULL; l = l->next) {
++		NautilusFile *file;
++
++		file = NAUTILUS_FILE (l->data);
++		if (!nautilus_file_is_gone (file)) {
++		        char *tmp;
++
++			tmp = nautilus_file_get_string_attribute_with_default (file, "selinux_context");
++		        if (!cntx) {
++			         cntx = tmp;
++			} else if (strcmp (cntx, tmp)) {
++				 g_free (tmp);
++				 g_free (cntx);
++				 return FALSE;
++			}
++			else {
++			         g_free (tmp);
++			}
++		}
++	}
++
++	g_free (cntx);
++	
++	return TRUE;
++}
++#endif
++
++/* NOTE: This modifies cntx */
++static void
++selinux_split_cntx (char *cntx,
++		    const char **ret_attr_u,
++		    const char **ret_attr_r,
++		    const char **ret_attr_t,
++		    const char **ret_attr_s)
++{
++	const char *attr_u;
++	const char *attr_r;
++	const char *attr_t;
++	const char *attr_s;
++
++	attr_u = cntx;
++	if (!(attr_r = strchr (attr_u, ':'))) {
++	        attr_r = "object_r"; /* shouldn't happen */
++	} else {
++	        *((char *)attr_r++) = 0;
++	}
++	
++	if (!(attr_t = strchr (attr_r, ':'))) {
++	        attr_t = "file_t"; /* shouldn't happen */
++	} else {
++	        *((char *)attr_t++) = 0;
++	}
++
++	if ((attr_s = strchr (attr_t, ':'))) {
++	        *((char *)attr_s++) = 0;
++	}
++
++	*ret_attr_u = attr_u;
++	*ret_attr_r = attr_r;
++	*ret_attr_t = attr_t;
++	*ret_attr_s = attr_s;
++}
++
+ static int
+ get_not_gone_original_file_count (FMPropertiesWindow *window)
+ {
+@@ -502,7 +644,7 @@ fm_properties_window_drag_data_received 
+ 		return;
+ 	}
+ 	
+-	uris = g_strsplit (selection_data->data, "\r\n", 0);
++	uris = g_strsplit ((char *) selection_data->data, "\r\n", 0);
+ 	exactly_one = uris[0] != NULL && (uris[1] == NULL || uris[1][0] == '\0');
+ 
+ 
+@@ -651,11 +793,7 @@ set_name_field (FMPropertiesWindow *wind
+ 			 * currently showing. This causes minimal ripples (e.g.
+ 			 * selection change).
+ 			 */
+-			gchar *displayed_name = gtk_editable_get_chars (GTK_EDITABLE (window->details->name_field), 0, -1);
+-			if (strcmp (displayed_name, name) != 0) {
+-				gtk_entry_set_text (GTK_ENTRY (window->details->name_field), name);
+-			}
+-			g_free (displayed_name);
++		        maybe_gtk_entry_set_text (GTK_ENTRY (window->details->name_field), name);
+ 		}
+ 	}
+ }
+@@ -735,7 +873,6 @@ static void
+ name_field_restore_original_name (NautilusEntry *name_field)
+ {
+ 	const char *original_name;
+-	char *displayed_name;
+ 
+ 	original_name = (const char *) g_object_get_data (G_OBJECT (name_field),
+ 							  "original_name");
+@@ -744,14 +881,8 @@ name_field_restore_original_name (Nautil
+ 		return;
+ 	}
+ 
+-	displayed_name = gtk_editable_get_chars (GTK_EDITABLE (name_field), 0, -1);
+-
+-	if (strcmp (original_name, displayed_name) != 0) {
+-		gtk_entry_set_text (GTK_ENTRY (name_field), original_name);
+-	}
++	maybe_gtk_entry_set_text (GTK_ENTRY (name_field), original_name);
+ 	nautilus_entry_select_all (name_field);
+-
+-	g_free (displayed_name);
+ }
+ 
+ static void
+@@ -1213,6 +1344,14 @@ properties_window_update (FMPropertiesWi
+ 		for (l = window->details->value_fields; l != NULL; l = l->next) {
+ 			value_field_update (window, GTK_LABEL (l->data));
+ 		}
++		
++		for (l = window->details->edit_fields; l != NULL; l = l->next) {
++			edit_field_update (window, GTK_ENTRY (l->data));
++		}
++		
++		for (l = window->details->selinux_combo; l != NULL; l = l->next) {
++			popup_field_update (window, GTK_COMBO_BOX (l->data));
++		}		
+ 	}
+ 
+ 	mime_list = get_mime_list (window);
+@@ -1383,6 +1522,164 @@ value_field_update (FMPropertiesWindow *
+ 				      window->details->target_files));
+ }
+ 
++static void
++edit_field_update_internal (GtkEntry *entry, 
++			    GList *file_list)
++{
++	const char *attr_name;
++	char *attr_value;
++	char *def_attr_value;
++	char *inconsistent_string;
++	gboolean sensitive;
++	
++	g_assert (GTK_IS_ENTRY (entry));
++
++	attr_name = g_object_get_data (G_OBJECT (entry), "file_attribute");
++	inconsistent_string = g_object_get_data (G_OBJECT (entry),
++						 "inconsistent_string");
++	def_attr_value = g_object_get_data (G_OBJECT (entry),
++					    "matchpathcon_cntx");
++	
++	attr_value = file_list_get_string_attribute (file_list, attr_name,
++						     inconsistent_string);
++
++	maybe_gtk_entry_set_text (GTK_ENTRY (entry), attr_value);
++
++	/* JFIXME: this isn't generic, *sigh* ... */
++	attach_selinux_data_edit_field (entry, attr_value, def_attr_value);
++	g_free (attr_value);
++	
++	sensitive = all_can_set_permissions (file_list);
++#ifdef HAVE_SELINUX
++	sensitive = sensitive && is_selinux_enabled ();
++#endif
++	gtk_widget_set_sensitive (GTK_WIDGET (entry), sensitive);
++}
++
++static void
++edit_field_update (FMPropertiesWindow *window, GtkEntry *entry)
++{
++	gboolean use_original;	
++
++	if (gtk_widget_is_focus (GTK_WIDGET (entry))) {
++	        return;
++	}
++	
++	use_original = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (entry), "show_original"));
++
++	edit_field_update_internal (entry, 
++				    (use_original ?
++				     window->details->original_files : 
++				     window->details->target_files));
++}
++
++static void
++selinux_combo_update_value (GtkComboBox *combo, const char *new_value)
++{
++    GtkTreeModel *model;
++    GtkTreeIter iter;
++    char *cntx_type;
++    gulong handler;
++
++    g_assert (GTK_IS_COMBO_BOX (combo));
++    if (! new_value)
++	return;
++
++    model = gtk_combo_box_get_model (combo);
++    if (! gtk_tree_model_get_iter_first (model, &iter))
++    	return;
++
++    handler = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (combo), "handler_changed"));
++    g_signal_handler_block (G_OBJECT (combo), handler);
++
++    do {
++    	gtk_tree_model_get (model, &iter, 0, &cntx_type, -1);
++    	
++    	if (cntx_type && (g_ascii_strcasecmp (new_value, cntx_type) == 0)) {
++    	    gtk_combo_box_set_active_iter (combo, &iter);
++    	    break;
++    	}
++    }
++    while (gtk_tree_model_iter_next (model, &iter));
++    g_signal_handler_unblock (G_OBJECT (combo), handler);
++}
++
++static void
++popup_field_update_internal (GtkComboBox *combo,
++			     GList *file_list)
++{
++	const char *attr_name;
++	char *attr_value;
++	char *def_attr_value;
++	char *inconsistent_string;
++	char *cntx_type;
++	const char *attr_u;
++	const char *attr_r;
++	const char *attr_t;
++	const char *attr_s;
++	gboolean sensitive;
++	GtkTreeIter iter;
++
++
++	g_assert (GTK_IS_COMBO_BOX (combo));
++
++	if (gtk_widget_is_focus (GTK_WIDGET (combo))) {
++	        return;
++	}
++
++	
++	sensitive = all_can_set_permissions (file_list);
++#ifdef HAVE_SELINUX
++	sensitive = sensitive && is_selinux_enabled ();
++#endif
++	gtk_widget_set_sensitive (GTK_WIDGET (combo), sensitive);
++
++	
++	attr_name = g_object_get_data (G_OBJECT (combo), "file_attribute");
++	inconsistent_string = g_object_get_data (G_OBJECT (combo),
++						 "inconsistent_string");
++	def_attr_value = g_object_get_data (G_OBJECT (combo),
++					    "matchpathcon_cntx");
++	
++	attr_value = file_list_get_string_attribute (file_list, attr_name,
++						     inconsistent_string);
++
++	selinux_split_cntx (attr_value, &attr_u, &attr_r, &attr_t, &attr_s);
++	
++	/* JFIXME: this isn't generic, *sigh* ... */
++	if (gtk_combo_box_get_active_iter (combo, &iter)) {
++		GtkTreeModel *model = gtk_combo_box_get_model (combo);
++
++		/* don't update, if it's identical */
++		gtk_tree_model_get (model, &iter, 0, &cntx_type, -1);
++		if (cntx_type && strcmp (cntx_type, attr_t) == 0) {
++			g_free (attr_value);
++			return;
++		}
++	}
++
++	selinux_combo_update_value (combo, attr_t);
++	
++	g_free (attr_value);
++}
++
++static void
++popup_field_update (FMPropertiesWindow *window, GtkComboBox *combo)
++{
++	gboolean use_original;
++
++	if (! window->details->selinux_combo) {
++	        return;
++	}
++	
++	use_original = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (combo), "show_original"));
++
++	popup_field_update_internal (combo,
++				     (use_original ?
++				      window->details->original_files : 
++				      window->details->target_files));
++}
++
+ static GtkLabel *
+ attach_label (GtkTable *table,
+ 	      int row,
+@@ -1437,6 +1734,47 @@ attach_value_label (GtkTable *table,
+ 	return attach_label (table, row, column, initial_text, FALSE, FALSE, FALSE, TRUE, FALSE);
+ }
+ 
++#ifdef HAVE_SELINUX
++static GtkEntry *
++attach_edit (GtkTable *table,
++	     int row,
++	     int column,
++	     const char *initial_text,
++	     gboolean right_aligned,
++	     gboolean bold,
++	     gboolean ellipsize_text,
++	     gboolean selectable,
++	     gboolean mnemonic)
++{
++	GtkWidget *entry_field;
++
++	entry_field = nautilus_entry_new ();
++	gtk_entry_set_text (GTK_ENTRY (entry_field), initial_text);
++
++	gtk_entry_set_alignment (GTK_ENTRY (entry_field), right_aligned ? 1 : 0);
++	gtk_widget_show (entry_field);
++	gtk_table_attach (table, entry_field,
++			  column, column + 1,
++			  row, row + 1,
++			  ellipsize_text
++			    ? GTK_FILL | GTK_EXPAND
++			    : GTK_FILL,
++			  0,
++			  0, 0);
++
++	return GTK_ENTRY (entry_field);
++}	      
++
++static GtkEntry *
++attach_edit_label (GtkTable *table,
++		   int row,
++		   int column,
++		   const char *initial_text)
++{
++	return attach_edit (table, row, column, initial_text, FALSE, FALSE, FALSE, TRUE, FALSE);
++}
++#endif
++
+ static GtkLabel *
+ attach_ellipsizing_value_label (GtkTable *table,
+ 				int row,
+@@ -1495,6 +1833,649 @@ attach_value_field (FMPropertiesWindow *
+ 				     FALSE);
+ }
+ 
++static void
++start_long_operation (FMPropertiesWindow *window)
++{
++	if (window->details->long_operation_underway == 0) {
++		/* start long operation */
++		GdkCursor * cursor;
++		
++		cursor = gdk_cursor_new (GDK_WATCH);
++		if (GDK_IS_WINDOW (GTK_WIDGET (window)->window)) {
++			gdk_window_set_cursor (GTK_WIDGET (window)->window, cursor);
++		}
++		gdk_cursor_unref (cursor);
++	}
++	window->details->long_operation_underway ++;
++}
++
++static void
++end_long_operation (FMPropertiesWindow *window)
++{
++	if (GTK_WIDGET (window)->window != NULL &&
++	    window->details->long_operation_underway == 1) {
++		/* finished !! */
++		gdk_window_set_cursor (GTK_WIDGET (window)->window, NULL);
++	}
++	window->details->long_operation_underway--;
++}
++
++#ifdef HAVE_SELINUX
++static void
++selinux_change_callback (NautilusFile *file,
++	       GFile         *result_location,
++	       GError        *error,
++	       gpointer       callback_data)
++{
++	FMPropertiesWindow *window;
++	g_assert (callback_data != NULL);
++
++	window = FM_PROPERTIES_WINDOW (callback_data);
++	end_long_operation (window);
++	
++	/* Report the error if it's an error. */
++	fm_report_error_setting_selinux (file, error, NULL);
++
++	g_object_unref (window);
++}
++
++static void
++selinux_done_editing (FMPropertiesWindow *window, char *selinux_context)
++{
++	GList *l;
++	
++	/* Accept changes. */
++	for (l = window->details->target_files; l != NULL; l = l->next) {
++		NautilusFile *file;
++
++		file = NAUTILUS_FILE (l->data);
++
++		start_long_operation (window);
++		g_object_ref (window);
++		nautilus_file_set_selinux_context (file, selinux_context,
++						   selinux_change_callback,
++						   window);
++	}
++}
++
++static gboolean
++selinux_focus_out (NautilusEntry *entry, GdkEventFocus *event, gpointer cb_data)
++{
++	g_assert (NAUTILUS_IS_ENTRY (entry));
++	g_assert (FM_IS_PROPERTIES_WINDOW (cb_data));
++
++	if (GTK_WIDGET_SENSITIVE (entry)) {	
++		char *tmp;
++		
++		tmp = gtk_editable_get_chars (GTK_EDITABLE (entry), 0, -1);
++		selinux_done_editing (FM_PROPERTIES_WINDOW (cb_data), tmp);
++		g_free (tmp);
++	}
++
++	return FALSE;
++}
++
++static void
++selinux_entry_activate (NautilusEntry *entry, gpointer cb_data)
++{
++	char *tmp;
++	
++	g_assert (NAUTILUS_IS_ENTRY (entry));
++	g_assert (FM_IS_PROPERTIES_WINDOW (cb_data));
++
++	tmp = gtk_editable_get_chars (GTK_EDITABLE (entry), 0, -1);
++	selinux_done_editing (FM_PROPERTIES_WINDOW (cb_data), tmp);
++	g_free (tmp);
++	
++	nautilus_entry_select_all_at_idle (entry);
++}
++
++static void
++selinux_popup_activate (GtkComboBox *comb, gpointer cb_data)
++{
++	char *cntx_type;
++	char *orig_type;
++	const char *attr_u;
++	const char *attr_r;
++	const char *attr_t;
++	const char *attr_s;
++	char *tmp;
++	GtkTreeIter iter;
++	GtkTreeModel *model;
++	
++	g_assert (GTK_IS_COMBO_BOX (comb));
++	g_assert (FM_IS_PROPERTIES_WINDOW (cb_data));
++
++	if (!gtk_combo_box_get_active_iter (comb, &iter)) {
++	        return;
++	} else {
++		model = gtk_combo_box_get_model (comb);
++	        gtk_tree_model_get (model, &iter, 0, &cntx_type, -1);
++	}
++	
++	if (!(orig_type = g_object_get_data (G_OBJECT (comb), "original_cntx"))) {
++	        return;
++	}
++	orig_type = g_strdup (orig_type);
++	
++	selinux_split_cntx (orig_type, &attr_u, &attr_r, &attr_t, &attr_s);
++	tmp = g_strjoin (":", attr_u, attr_r, cntx_type, attr_s, NULL);
++	g_free (orig_type);
++	
++	selinux_done_editing (FM_PROPERTIES_WINDOW (cb_data), tmp);
++	g_free (tmp);
++}
++
++static char *
++cust_type_next_line (GIOChannel *ioc_ctypes)
++{
++	char *data;
++	gsize term;
++	GError *errc;
++
++	data = NULL;
++	term = 0;
++	errc = NULL;
++	
++	if (G_IO_STATUS_NORMAL == g_io_channel_read_line (ioc_ctypes, &data,
++							  NULL, &term, &errc)) {
++	        data[term] = 0;
++		return data;
++	}
++
++	return NULL;
++}
++#endif
++
++static GSList *
++selinux__type_list (void)
++{
++	static GSList *cust_types;
++	GSList *scan;
++#ifdef HAVE_SELINUX
++	static time_t file_mtime;
++	const char *fname_ctypes;
++	struct stat buf;
++	GIOChannel *ioc_ctypes;
++	GError *errc;
++	int fd;
++#endif
++	
++#ifndef HAVE_SELINUX
++	if (cust_types) {
++	        return cust_types;
++	}
++#else
++	fname_ctypes = selinux_customizable_types_path ();
++	if (cust_types && file_mtime && !stat (fname_ctypes, &buf) &&
++	    (file_mtime == buf.st_mtime)) {
++	        return cust_types;
++	}
++#endif
++
++	if (cust_types) {
++	        for (scan = cust_types; scan; scan = scan->next) {
++		        g_free (scan->data);
++		}
++		g_slist_free (cust_types);
++		cust_types = NULL;
++	}
++	
++	cust_types = g_slist_prepend (cust_types, g_strdup ("tmp_t"));
++	cust_types = g_slist_prepend (cust_types, g_strdup ("user_home_t"));
++	/* cust_types = g_slist_prepend (cust_types, g_strdup ("user_tmp_t")); */
++	
++#ifdef HAVE_SELINUX
++	/* read types, one per line... */
++	fname_ctypes = selinux_customizable_types_path ();
++	errc = NULL;
++	if ((ioc_ctypes = g_io_channel_new_file (fname_ctypes, "r", &errc))) {
++	        char *data = NULL;
++
++		while ((data = cust_type_next_line (ioc_ctypes))) {
++		        cust_types = g_slist_prepend (cust_types, data);
++		}
++
++		fd = g_io_channel_unix_get_fd (ioc_ctypes);
++		if (!fstat (fd, &buf)) {
++			file_mtime = buf.st_mtime;
++		}
++
++		g_io_channel_unref (ioc_ctypes);
++	}
++#endif
++
++	return cust_types;
++}
++
++static void
++attach_selinux_data_edit_field (GtkEntry *entry,
++				char *attr_val, char *def_attr_val)
++{
++	GtkEntryCompletion *comp;
++	GtkCellRenderer *cell;
++	const char *attr_u;
++	const char *attr_r;
++	const char *attr_t;
++	const char *attr_s;
++	const char *dattr_u;
++	const char *dattr_r;
++	const char *dattr_t;
++	const char *dattr_s;
++	GtkListStore *store;
++	GtkTreeIter iter;
++	GSList *scan;
++	int width;
++	int owidth;
++	int twidth;
++	
++	attr_val     = g_strdup (attr_val); /* so we can alter it... */
++	def_attr_val = g_strdup (def_attr_val); /* so we can alter it... */
++	
++	/* do completion, so you don't have to type everything... */
++	comp = gtk_entry_completion_new ();
++	store = gtk_list_store_new (2, G_TYPE_STRING, G_TYPE_STRING);
++	gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (store),
++					      0, GTK_SORT_ASCENDING);
++	
++	gtk_entry_completion_set_model (comp, GTK_TREE_MODEL (store));
++	cell = gtk_cell_renderer_pixbuf_new ();
++	gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (comp), cell, FALSE);
++	gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (comp), cell,
++					"stock-id", 1, NULL);
++	gtk_entry_completion_set_text_column (comp, 0);
++	gtk_entry_set_completion (entry, comp);
++
++	 /* FIXME: default doesn't do the right thing, should it? */
++	owidth = gtk_entry_get_width_chars (entry);
++	width = owidth;
++	
++	selinux_split_cntx (attr_val, &attr_u, &attr_r, &attr_t, &attr_s);
++	dattr_u = dattr_r = dattr_t = dattr_s = NULL;
++	if (def_attr_val) {
++	          selinux_split_cntx (def_attr_val, &dattr_u, &dattr_r,
++				      &dattr_t, &dattr_s);
++	}
++	
++	/* don't do it twice... */
++	if (attr_t && dattr_t && !strcmp (attr_t, dattr_t)) {
++	        dattr_t = NULL;
++	}
++
++	if (attr_t && GTK_WIDGET_SENSITIVE (entry)) {
++	  /* highlight just the type to the end, so we can easily change it
++	   * FIXME: we also highlight any Sensitivity/MCS but completion will
++	   * let people put it back, and that's the only way we get completion
++	   * at all -- This sucks and we need to remove Sensitivity/MCS from
++	   * the edit box. Yah, more UI. */
++	        int beg =  attr_t      - attr_u;
++		gtk_editable_select_region (GTK_EDITABLE (entry), beg, -1);
++	}
++	
++	for (scan = selinux__type_list(); scan; scan = scan->next) {
++		char *tmp;
++
++		if (attr_t  && !strcmp (attr_t,  scan->data))
++		        continue; /* don't have two entries */
++
++		if (dattr_t && !strcmp (dattr_t, scan->data))
++		        continue; /* don't have two entries */
++
++		gtk_list_store_append (store, &iter);
++		tmp = g_strjoin (":", attr_u, attr_r, scan->data, attr_s, NULL);
++		gtk_list_store_set (store, &iter, 0, tmp, -1);
++
++		twidth = strlen (tmp);
++		width = MAX (twidth, width);
++		
++		g_free (tmp);
++	}
++
++	if (dattr_t) {
++		char *tmp;
++
++		gtk_list_store_append (store, &iter);
++		tmp = g_strjoin (":", dattr_u, dattr_r, dattr_t, dattr_s, NULL);
++		gtk_list_store_set (store, &iter, 0, tmp,
++				    1, GTK_STOCK_HOME, -1);
++
++		twidth = strlen (tmp);
++		width = MAX (twidth, width);
++
++		g_free (tmp);
++	}
++
++	if (attr_t) {
++		char *tmp;
++
++		gtk_list_store_append (store, &iter);
++		tmp = g_strjoin (":", attr_u, attr_r, attr_t, attr_s, NULL);
++		gtk_list_store_set (store, &iter, 0, tmp, 1, GTK_STOCK_OK, -1);
++
++		twidth = strlen (tmp);
++		width = MAX (twidth, width);
++
++		g_free (tmp);
++	}
++
++	g_free (attr_val);
++	g_free (def_attr_val);
++	g_object_unref (G_OBJECT (store));	
++	g_object_unref (G_OBJECT (comp));
++
++	if (width != owidth) {
++	        gtk_entry_set_width_chars (entry, width + 2);
++	}
++}
++
++#ifdef HAVE_SELINUX
++
++# define HACK_TYPE(x, y)				\
++	else if (!strcmp (nice_type, x)) nice_type = y
++
++/* hack to convert a selinux_context type into a readable string for the
++   user */
++static const char *
++selinux__hack_conv_type (const char *type)
++{ /* FIXME: hack attack, but nowhere else to put it. Because mathpathcon
++   * here now probably want a bunch of other types? */
++        const char *nice_type;
++
++	nice_type = type;
++	
++	if (0) { }
++	
++	HACK_TYPE("cupsd_etc_t", _("CUPS printer configuration"));
++	HACK_TYPE("cupsd_rw_etc_t", _("CUPS printer configuration (rw)"));
++	HACK_TYPE("cupsd_tmp_t", _("CUPS temporary data"));
++	HACK_TYPE("dhcp_etc_t", _("DHCP configuration"));
++	HACK_TYPE("dictd_etc_t", _("Dictd configuration"));
++	HACK_TYPE("dnssec_t", _("DNS secret"));
++	HACK_TYPE("etc_t", _("System configuration"));
++	HACK_TYPE("etc_aliases_t", _("Email aliases configuration"));
++	HACK_TYPE("etc_runtime_t", _("System configuration (rw)"));
++	HACK_TYPE("cvs_data_t", _("Read and write from CVS daemon"));
++	HACK_TYPE("httpd_config_t", _("Apache-httpd configuration"));
++	HACK_TYPE("httpd_php_tmp_t",
++		  _("Apache-httpd PHP module temporary data"));
++	HACK_TYPE("httpd_sys_content_t",
++		  _("Read from all httpd scripts and the daemon"));
++	HACK_TYPE("httpd_sys_htaccess_t",
++		  _("Apache-httpd .htaccess configuration"));
++	HACK_TYPE("httpd_sys_script_exec_t",
++		  _("CGI programs with default access"));
++	HACK_TYPE("httpd_sys_script_ra_t",
++		  _("CGI programs can read and append"));
++	HACK_TYPE("httpd_sys_script_ro_t",
++		  _("CGI programs can read"));
++	HACK_TYPE("httpd_sys_script_rw_t",
++		  _("CGI programs can read and write"));
++	HACK_TYPE("httpd_unconfined_script_exec_t",
++		  _("CGI programs without any SELinux protection"));
++	HACK_TYPE("httpd_tmp_t", _("Apache-httpd temporary data"));
++	HACK_TYPE("ice_tmp_t", _("ICE temporary data"));
++	HACK_TYPE("locale_t", _("Locale data"));
++	HACK_TYPE("mysql_tmp_t", _("MySQL temporary data"));
++	HACK_TYPE("named_conf_t", _("Nameserver configuration"));
++	HACK_TYPE("net_conf_t", _("Network configuration"));
++	HACK_TYPE("postgresql_tmp_t", _("Postgresql temporary data"));
++	HACK_TYPE("public_content_rw_t",
++		  _("Read and write from CIFS/ftp/http/nfs/rsync"));
++	HACK_TYPE("public_content_t", _("Read from CIFS/ftp/http/nfs/rsync"));
++	HACK_TYPE("samba_etc_t", _("Samba configuration"));
++	HACK_TYPE("samba_share_t", _("Shared via CIFS (samba)"));
++	HACK_TYPE("staff_home_t", _("Staff user data"));
++	HACK_TYPE("staff_home_dir_t", _("Staff user home directory"));
++	HACK_TYPE("swapfile_t", _("System swapfile"));
++	HACK_TYPE("sysadm_home_t", _("Sysadmin user data"));
++	HACK_TYPE("sysadm_home_dir_t", _("Sysadmin user home directory"));
++	HACK_TYPE("system_cron_spool_t", _("Cron data"));
++	HACK_TYPE("tmp_t", _("Temporary data"));
++	HACK_TYPE("user_tmp_t", _("User temporary data"));
++	HACK_TYPE("user_home_t", _("User data"));
++	HACK_TYPE("user_home_dir_t", _("User home directory"));
++	HACK_TYPE("var_log_t", _("Logfile"));
++	HACK_TYPE("xen_image_t", _("Xen image"));
++	
++	return nice_type;
++}
++#undef HACK_TYPE
++
++static void
++attach_selinux_data_popup_field (GtkComboBox *comb,
++				 char *attr_val,
++				 char *def_attr_val)
++{
++	const char *attr_u;
++	const char *attr_r;
++	const char *attr_t;
++	const char *attr_s;
++	const char *dattr_u;
++	const char *dattr_r;
++	const char *dattr_t;
++	const char *dattr_s;
++	GtkListStore *store;
++	GtkTreeIter iter;
++	GSList *scan;
++	
++	attr_val     = g_strdup (attr_val); /* so we can alter it... */
++	def_attr_val = g_strdup (def_attr_val);
++
++	/* do completion, so you don't have to type everything... */
++	store = gtk_list_store_new (3, G_TYPE_STRING,
++				    G_TYPE_STRING, G_TYPE_STRING);
++	gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (store),
++					      1, GTK_SORT_ASCENDING);
++	
++	gtk_combo_box_set_model (comb, GTK_TREE_MODEL (store));
++
++	selinux_split_cntx (attr_val, &attr_u, &attr_r, &attr_t, &attr_s);
++	dattr_u = dattr_r = dattr_t = dattr_s = NULL;
++	if (def_attr_val) {
++	          selinux_split_cntx (def_attr_val, &dattr_u, &dattr_r,
++				      &dattr_t, &dattr_s);
++	}
++	/* don't do it twice... */
++	if (attr_t && dattr_t && !strcmp (attr_t, dattr_t)) {
++	        dattr_t = NULL;
++	}
++
++	for (scan = selinux__type_list(); scan; scan = scan->next) {
++		const char *nice_type;
++		
++		if (attr_t  && !strcmp (attr_t,  scan->data))
++		        continue; /* don't have two entries */
++
++		if (dattr_t && !strcmp (dattr_t, scan->data))
++		        continue; /* don't have two entries */
++
++		nice_type = selinux__hack_conv_type(scan->data);
++		
++		gtk_list_store_append (store, &iter);
++		gtk_list_store_set (store, &iter, 0, scan->data,
++				    1, nice_type, -1);
++	}
++
++	if (dattr_t) {
++		const char *nice_type;
++		
++		gtk_list_store_append (store, &iter);
++		nice_type = selinux__hack_conv_type(dattr_t);
++	        gtk_list_store_set (store, &iter, 0, dattr_t, 1, nice_type,
++				    2, GTK_STOCK_HOME, -1);
++	}
++
++	if (attr_t) {
++		const char *nice_type;
++		
++		gtk_list_store_append (store, &iter);
++		nice_type = selinux__hack_conv_type(attr_t);
++	        gtk_list_store_set (store, &iter, 0,  attr_t, 1, nice_type,
++				    2, GTK_STOCK_OK, -1);
++		gtk_combo_box_set_active_iter (comb, &iter);
++	}
++
++	g_free (attr_val);
++	g_free (def_attr_val);
++	g_object_unref (G_OBJECT (store));
++}
++
++static char *
++selinux__matchpathcon (GList *file_list)
++{
++	GList *scan;
++
++        for (scan = file_list; scan != NULL; scan = scan->next) {
++	        NautilusFile *file;
++
++		file = NAUTILUS_FILE (scan->data);
++		if (!nautilus_file_is_gone (file)) {
++		        return nautilus_file_get_selinux_matchpathcon (file);
++		}
++	}
++
++	return NULL;
++}
++
++static void
++attach_selinux_edit_field (FMPropertiesWindow *window,
++			   GtkTable *table,
++			   int row,
++			   int column,
++			   const char *file_attribute_name,
++			   const char *inconsistent_string,
++			   gboolean show_original,
++			   GtkLabel *lab_title)
++{
++	GtkEntry *entry;
++	GList *file_list;
++	char *attr_value;
++	char *def_attr_value;
++	
++	if (show_original) {
++	        file_list = window->details->original_files;
++	} else {
++	        file_list = window->details->target_files;
++	}
++	
++	attr_value = file_list_get_string_attribute (file_list, 
++						     file_attribute_name,
++						     inconsistent_string);
++	if ( strcmp (attr_value, inconsistent_string) &&
++	    !strcmp (file_attribute_name, "selinux_context")) {
++	        def_attr_value = selinux__matchpathcon (file_list);
++	} else {
++	        def_attr_value = NULL;
++	}
++	
++	entry = attach_edit_label (table, row, column, attr_value);
++	gtk_label_set_mnemonic_widget (GTK_LABEL (lab_title),
++				       GTK_WIDGET (entry));
++
++  	/* Stash a copy of the file attribute name in this field for the callback's sake. */
++	g_object_set_data_full (G_OBJECT (entry), "file_attribute",
++				g_strdup (file_attribute_name), g_free);
++
++	g_object_set_data_full (G_OBJECT (entry), "inconsistent_string",
++				g_strdup (inconsistent_string), g_free);
++
++	g_object_set_data (G_OBJECT (entry), "show_original", GINT_TO_POINTER (show_original));
++	g_object_set_data (G_OBJECT (entry), "ellipsize_text", GINT_TO_POINTER (FALSE));
++
++	g_signal_connect_object (entry, "focus_out_event",
++				 G_CALLBACK (selinux_focus_out), window, 0);
++	g_signal_connect_object (entry, "activate",
++				 G_CALLBACK (selinux_entry_activate), window,0);
++
++	attach_selinux_data_edit_field (entry, attr_value, def_attr_value);
++	
++	g_object_set_data_full (G_OBJECT (entry), "original_cntx", attr_value,
++				g_free);
++
++	g_object_set_data_full (G_OBJECT (entry), "matchpathcon_cntx",
++				def_attr_value, g_free);
++
++	window->details->edit_fields = g_list_prepend (window->details->edit_fields,
++						       entry);
++}
++
++static void
++attach_selinux_popup_field (FMPropertiesWindow *window,
++			    GtkTable *table,
++			    int row,
++			    int column,
++			    const char *file_attribute_name,
++			    const char *inconsistent_string,
++			    gboolean show_original,
++			    GtkLabel *lab_title)
++{
++	GtkWidget *comb;
++	GtkCellRenderer *cell;
++	GList *file_list;
++	char *attr_value;
++	char *def_attr_value;
++	gulong handler;
++	
++	if (show_original) {
++	        file_list = window->details->original_files;
++	} else {
++	        file_list = window->details->target_files;
++	}
++	
++	attr_value = file_list_get_string_attribute (file_list, 
++						     file_attribute_name,
++						     inconsistent_string);
++	if ( strcmp (attr_value, inconsistent_string) &&
++	    !strcmp (file_attribute_name, "selinux_context")) {
++	        def_attr_value = selinux__matchpathcon (file_list);	
++	} else {
++	        def_attr_value = NULL;
++	}
++	
++	comb = gtk_combo_box_new ();
++	
++	gtk_table_attach (table, comb, column, column + 1, row, row + 1,
++			  GTK_FILL, 0, 0, 0);
++
++	
++	gtk_label_set_mnemonic_widget (GTK_LABEL (lab_title), comb);
++
++  	/* Stash a copy of the file attribute name in this field for the callback's sake. */
++	g_object_set_data_full (G_OBJECT (comb), "file_attribute",
++				g_strdup (file_attribute_name), g_free);
++
++	g_object_set_data (G_OBJECT (comb), "show_original", GINT_TO_POINTER (show_original));
++
++	g_object_set_data_full (G_OBJECT (comb), "original_cntx", attr_value,
++				g_free);
++
++	g_object_set_data_full (G_OBJECT (comb), "matchpathcon_cntx",
++				def_attr_value, g_free);
++
++	cell = gtk_cell_renderer_pixbuf_new ();
++	gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (comb), cell, FALSE);
++	gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (comb), cell,
++					"stock-id", 2, NULL);
++	cell = gtk_cell_renderer_text_new ();
++	gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (comb), cell, FALSE);
++	gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (comb), cell,
++					"text", 1, NULL);
++	gtk_widget_show (comb);
++
++	attach_selinux_data_popup_field (GTK_COMBO_BOX (comb),
++					 attr_value, def_attr_value);
++
++	handler = g_signal_connect_object (comb, "changed",
++				 G_CALLBACK (selinux_popup_activate), window, 0);
++	g_object_set_data (G_OBJECT (comb), "handler_changed", GUINT_TO_POINTER (handler));
++
++	g_assert (! window->details->selinux_combo);
++	
++	window->details->selinux_combo = 
++		g_list_prepend (window->details->selinux_combo, comb);
++}
++#endif
++
+ static GtkWidget*
+ attach_ellipsizing_value_field (FMPropertiesWindow *window,
+ 				GtkTable *table,
+@@ -2485,6 +3466,37 @@ append_title_value_pair (FMPropertiesWin
+ 	return last_row;
+ }
+ 
++#ifdef HAVE_SELINUX
++static guint
++append_title_selinux_edit_pair (FMPropertiesWindow *window,
++				GtkTable *table,
++				const char *title, 
++				const char *file_attribute_name,
++				const char *inconsistent_state,
++				gboolean show_original)
++{
++	guint last_row;
++	GtkLabel *lab_title;
++
++	lab_title = NULL;
++	last_row = append_title_field (table, title, &lab_title);
++
++	if (window->details->advanced_permissions) {
++	        attach_selinux_edit_field (window, table, last_row,
++					   VALUE_COLUMN, file_attribute_name,
++					   inconsistent_state,
++					   show_original, lab_title);
++	} else {
++	        attach_selinux_popup_field (window, table, last_row,
++					    VALUE_COLUMN, file_attribute_name,
++					    inconsistent_state,
++					    show_original, lab_title);	  
++	}
++	
++	return last_row;
++}
++#endif
++
+ static guint
+ append_title_and_ellipsizing_value (FMPropertiesWindow *window,
+ 				    GtkTable *table,
+@@ -3504,31 +4516,6 @@ create_emblems_page (FMPropertiesWindow 
+ }
+ 
+ static void
+-start_long_operation (FMPropertiesWindow *window)
+-{
+-	if (window->details->long_operation_underway == 0) {
+-		/* start long operation */
+-		GdkCursor * cursor;
+-		
+-		cursor = gdk_cursor_new (GDK_WATCH);
+-		gdk_window_set_cursor (GTK_WIDGET (window)->window, cursor);
+-		gdk_cursor_unref (cursor);
+-	}
+-	window->details->long_operation_underway ++;
+-}
+-
+-static void
+-end_long_operation (FMPropertiesWindow *window)
+-{
+-	if (GTK_WIDGET (window)->window != NULL &&
+-	    window->details->long_operation_underway == 1) {
+-		/* finished !! */
+-		gdk_window_set_cursor (GTK_WIDGET (window)->window, NULL);
+-	}
+-	window->details->long_operation_underway--;
+-}
+-
+-static void
+ permission_change_callback (NautilusFile *file,
+ 			    GFile *res_loc,
+ 			    GError *error,
+@@ -4304,39 +5291,6 @@ append_special_execution_flags (FMProper
+ 	gtk_table_set_row_spacing (table, table->nrows - 1, 18);
+ }
+ 
+-static gboolean
+-all_can_get_permissions (GList *file_list)
+-{
+-	GList *l;
+-	for (l = file_list; l != NULL; l = l->next) {
+-		NautilusFile *file;
+-		
+-		file = NAUTILUS_FILE (l->data);
+-		
+-		if (!nautilus_file_can_get_permissions (file)) {
+-			return FALSE;
+-		}
+-	}
+-
+-	return TRUE;
+-}
+-
+-static gboolean
+-all_can_set_permissions (GList *file_list)
+-{
+-	GList *l;
+-	for (l = file_list; l != NULL; l = l->next) {
+-		NautilusFile *file;
+-		
+-		file = NAUTILUS_FILE (l->data);
+-
+-		if (!nautilus_file_can_set_permissions (file)) {
+-			return FALSE;
+-		}
+-	}
+-
+-	return TRUE;
+-}
+ 
+ static GHashTable *
+ get_initial_permissions (GList *file_list)
+@@ -4676,7 +5630,9 @@ apply_recursive_clicked (GtkWidget *recu
+ 	guint32 file_permission, file_permission_mask;
+ 	guint32 dir_permission, dir_permission_mask;
+ 	guint32 vfs_mask, vfs_new_perm, p;
+-	GtkWidget *button, *combo;
++	char *context; 
++	GtkWidget *button; 
++	GtkComboBox *combo; 
+ 	gboolean active, is_folder, is_special, use_original;
+ 	GList *l;
+ 	GtkTreeModel *model;
+@@ -4720,9 +5676,9 @@ apply_recursive_clicked (GtkWidget *recu
+ 	}
+ 	/* Simple mode, minus exec checkbox */
+ 	for (l = window->details->permission_combos; l != NULL; l = l->next) {
+-		combo = l->data;
++		combo = GTK_COMBO_BOX (l->data);
+ 		
+-		if (!gtk_combo_box_get_active_iter (GTK_COMBO_BOX (combo),  &iter)) {
++		if (!gtk_combo_box_get_active_iter (combo,  &iter)) {
+ 			continue;
+ 		}
+ 		
+@@ -4730,7 +5686,7 @@ apply_recursive_clicked (GtkWidget *recu
+ 		is_folder = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (combo),
+ 								"is-folder"));
+ 		
+-		model = gtk_combo_box_get_model (GTK_COMBO_BOX (combo));
++		model = gtk_combo_box_get_model (combo);
+ 		gtk_tree_model_get (model, &iter, 1, &new_perm, 2, &use_original, -1);
+ 		if (use_original) {
+ 			continue;
+@@ -4753,12 +5709,53 @@ apply_recursive_clicked (GtkWidget *recu
+ 		}
+ 	}
+ 
++	/* get the SELinux context... */
++	context = NULL;
++	if (window->details->advanced_permissions &&
++	    window->details->edit_fields) { /* advanced mode */
++		GtkEditable *efield;
++
++		efield = window->details->edit_fields->data;
++	        context = gtk_editable_get_chars (GTK_EDITABLE (efield), 0, -1);
++	} else if (!window->details->advanced_permissions &&
++		   window->details->selinux_combo) { /* simple mode */
++	        char *cntx_type;
++	        char *orig_type;
++	        const char *attr_u;
++	        const char *attr_r;
++	        const char *attr_t;
++	        const char *attr_s;
++	  
++		combo = GTK_COMBO_BOX (window->details->selinux_combo->data);
++	        
++	        if (!gtk_combo_box_get_active_iter (combo, &iter)) {
++		        return;
++		} else {
++		        GtkTreeModel *model = gtk_combo_box_get_model (combo);
++			gtk_tree_model_get (model, &iter, 0, &cntx_type, -1);
++		}
++		if (!(orig_type = g_object_get_data (G_OBJECT (combo),
++						     "original_cntx"))) {
++		        return;
++		}
++		
++		orig_type = g_strdup (orig_type);
++	
++		selinux_split_cntx (orig_type,
++				    &attr_u, &attr_r, &attr_t, &attr_s);
++		context = g_strjoin (":",
++				     attr_u, attr_r, cntx_type, attr_s, NULL);
++		g_free (orig_type);
++	}
++	
+ 	for (l = window->details->target_files; l != NULL; l = l->next) {
+ 		NautilusFile *file;
+ 		char *uri;
+ 
+ 		file = NAUTILUS_FILE (l->data);
+ 
++		/* assume permissions setting allows context setting...
++		 * we can't really do much else due to race conditions anyway */
+ 		if (nautilus_file_is_directory (file) &&
+ 		    nautilus_file_can_set_permissions (file)) {
+ 			uri = nautilus_file_get_uri (file);
+@@ -4769,11 +5766,13 @@ apply_recursive_clicked (GtkWidget *recu
+ 								 file_permission_mask,
+ 								 dir_permission,
+ 								 dir_permission_mask,
++								 context,
+ 								 set_recursive_permissions_done,
+ 								 window);
+ 			g_free (uri);
+ 		}
+ 	}
++	g_free (context);
+ }
+ 
+ static void
+@@ -4822,10 +5821,16 @@ create_permissions_page (FMPropertiesWin
+ 		gtk_table_set_row_spacing (page_table, page_table->nrows - 1, 18);
+ 	
+ #ifdef HAVE_SELINUX
+-		append_title_value_pair
+-			(window, page_table, _("SELinux context:"), 
+-			 "selinux_context", INCONSISTENT_STATE_STRING,
+-			 FALSE);
++		if (!is_multi_file_window (window) || multi_have_same_selinux_context (window)) 
++			append_title_selinux_edit_pair (window, page_table, 
++							_("_SELinux Context:"),  
++							"selinux_context", INCONSISTENT_STATE_STRING,
++							FALSE); 
++		else /* Static text in this case. */ 
++			append_title_value_pair (window, page_table, 
++						 _("_SELinux Context:"),  
++						 "selinux_context", INCONSISTENT_STATE_STRING,
++						 FALSE); 
+ #endif
+ 		append_title_value_pair
+ 			(window, page_table, _("Last changed:"), 

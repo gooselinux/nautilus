@@ -1,0 +1,24 @@
+From da22ba01ae748cc7dfd586368060896c30dccbff Mon Sep 17 00:00:00 2001
+From: Tomas Bzatek <tbzatek@redhat.com>
+Date: Tue, 23 Mar 2010 16:52:05 +0100
+Subject: [PATCH] Unref local query object when turning search off
+
+---
+ src/nautilus-navigation-window-menus.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/src/nautilus-navigation-window-menus.c b/src/nautilus-navigation-window-menus.c
+index 7aab617..ec48324 100644
+--- a/src/nautilus-navigation-window-menus.c
++++ b/src/nautilus-navigation-window-menus.c
+@@ -704,6 +704,7 @@ action_show_hide_search_callback (GtkAction *action,
+ 					location = g_file_new_for_uri (uri);
+ 					g_free (uri);
+ 				}
++				g_object_unref (query);
+ 			}
+ 		}
+ 
+-- 
+1.7.0.1
+
